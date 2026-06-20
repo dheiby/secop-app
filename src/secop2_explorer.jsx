@@ -1,33 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import GeovisorSecop from "./GeovisorSecop";
+import { api } from "./api.js";
 
 const API_BASE = import.meta.env.DEV
   ? "/api/secop"
   : "https://www.datos.gov.co/resource/p6dx-8zbt.json";
-
-// ── Utilidades de auth ──────────────────────────────────────────────
-async function hashPassword(pass) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pass));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-const AUTH_KEY = "secop_users";
-const SESSION_KEY = "secop_session";
-
-function getUsers() {
-  try { return JSON.parse(localStorage.getItem(AUTH_KEY) || "[]"); } catch { return []; }
-}
-function saveUsers(users) {
-  localStorage.setItem(AUTH_KEY, JSON.stringify(users));
-}
-function getSession() {
-  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
-}
-function saveSession(user) {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
-}
-function clearSession() {
-  sessionStorage.removeItem(SESSION_KEY);
-}
 
 // ── Pantalla de Login ───────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
@@ -41,28 +18,16 @@ function LoginScreen({ onLogin }) {
   const [regPass2, setRegPass2] = useState("");
   const [regError, setRegError] = useState("");
 
-  // Crear usuario admin por defecto si no hay usuarios
-  useEffect(() => {
-    const users = getUsers();
-    if (users.length === 0) {
-      hashPassword("secop2026").then(hash => {
-        saveUsers([{ username: "admin", passwordHash: hash, createdAt: Date.now() }]);
-      });
-    }
-  }, []);
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      const users = getUsers();
-      const hash = await hashPassword(password);
-      const user = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase() && u.passwordHash === hash);
-      if (!user) { setError("Usuario o contraseña incorrectos"); setLoading(false); return; }
-      saveSession({ username: user.username });
-      onLogin(user.username);
-    } catch { setError("Error al iniciar sesión"); }
+      const user = await api.login(username, password);
+      onLogin(user.username, user.role);
+    } catch (err) {
+      setError(err.message || "Error al iniciar sesión");
+    }
     setLoading(false);
   };
 
@@ -70,15 +35,14 @@ function LoginScreen({ onLogin }) {
     e.preventDefault();
     setRegError("");
     if (!regUser.trim()) { setRegError("Ingresa un nombre de usuario"); return; }
-    if (regPass.length < 4) { setRegError("La contraseña debe tener al menos 4 caracteres"); return; }
+    if (regPass.length < 6) { setRegError("La contraseña debe tener al menos 6 caracteres"); return; }
     if (regPass !== regPass2) { setRegError("Las contraseñas no coinciden"); return; }
-    const users = getUsers();
-    if (users.some(u => u.username.toLowerCase() === regUser.trim().toLowerCase())) { setRegError("Ese usuario ya existe"); return; }
-    const hash = await hashPassword(regPass);
-    saveUsers([...users, { username: regUser.trim(), passwordHash: hash, createdAt: Date.now() }]);
-    setShowRegister(false);
-    setUsername(regUser.trim());
-    setRegUser(""); setRegPass(""); setRegPass2("");
+    try {
+      const user = await api.register(regUser.trim(), regPass);
+      onLogin(user.username, user.role);
+    } catch (err) {
+      setRegError(err.message || "Error al registrar");
+    }
   };
 
   const inputStyle = {
@@ -125,7 +89,7 @@ function LoginScreen({ onLogin }) {
               Crear nuevo usuario
             </button>
             <div style={{ color: "#475569", fontSize: 11, textAlign: "center" }}>
-              Usuario por defecto: <strong style={{ color: "#64748b" }}>admin</strong> / <strong style={{ color: "#64748b" }}>secop2026</strong>
+              Sistema de usuarios centralizado · PostgreSQL
             </div>
           </form>
         ) : (
@@ -597,16 +561,31 @@ function RecordModal({ row, colLabel, formatCOP, formatDate, detectType, onClose
 }
 
 export default function AppRoot() {
-  const [currentUser, setCurrentUser] = useState(() => getSession()?.username || null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userRole, setUserRole] = useState("user");
+  const [checking, setChecking] = useState(true);
 
-  const handleLogin = (username) => setCurrentUser(username);
-  const handleLogout = () => { clearSession(); setCurrentUser(null); };
+  // Validar JWT existente al cargar
+  useEffect(() => {
+    api.me()
+      .then(u => { if (u) { setCurrentUser(u.username); setUserRole(u.role); } })
+      .catch(() => {})
+      .finally(() => setChecking(false));
+  }, []);
 
+  const handleLogin = (username, role = "user") => { setCurrentUser(username); setUserRole(role); };
+  const handleLogout = () => { api.logout(); setCurrentUser(null); setUserRole("user"); };
+
+  if (checking) return (
+    <div style={{ minHeight: "100vh", background: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 14 }}>
+      Verificando sesión…
+    </div>
+  );
   if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
-  return <SecopExplorer currentUser={currentUser} onLogout={handleLogout} />;
+  return <SecopExplorer currentUser={currentUser} userRole={userRole} onLogout={handleLogout} />;
 }
 
-function SecopExplorer({ currentUser, onLogout }) {
+function SecopExplorer({ currentUser, userRole, onLogout }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -634,28 +613,34 @@ function SecopExplorer({ currentUser, onLogout }) {
   // Nuevos estados
   const [unspsc, setUnspsc] = useState("");
   const [vistaPanel, setVistaPanel] = useState("todos"); // "todos" | "seguimientos"
-  const seguimientosKey = `secop_seguimientos_${currentUser}`;
-  const [seguimientos, setSeguimientos] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(`secop_seguimientos_${currentUser}`) || "[]"); }
-    catch { return []; }
-  });
+  const [vistaGeovisor, setVistaGeovisor] = useState(false);
+  const [seguimientos, setSeguimientos] = useState([]);
 
-  // Persistir seguimientos en localStorage por usuario
+  // Cargar seguimientos desde la API al iniciar sesión
   useEffect(() => {
-    localStorage.setItem(seguimientosKey, JSON.stringify(seguimientos));
-  }, [seguimientos, seguimientosKey]);
+    api.getSeguimientos()
+      .then(data => setSeguimientos(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, [currentUser]);
 
-  const toggleSeguimiento = useCallback((row) => {
-    const id = row.id_del_proceso || row.referencia_del_proceso || row.nombre_del_procedimiento;
-    setSeguimientos(prev => {
-      const existe = prev.some(r => (r.id_del_proceso || r.referencia_del_proceso || r.nombre_del_procedimiento) === id);
-      return existe ? prev.filter(r => (r.id_del_proceso || r.referencia_del_proceso || r.nombre_del_procedimiento) !== id) : [...prev, row];
-    });
-  }, []);
+  const getProcesoId = (row) =>
+    row.id_del_proceso || row.referencia_del_proceso || row.nombre_del_procedimiento || row._seguimiento_id;
+
+  const toggleSeguimiento = useCallback(async (row) => {
+    const id = getProcesoId(row);
+    const existe = seguimientos.some(r => getProcesoId(r) === id);
+    if (existe) {
+      setSeguimientos(prev => prev.filter(r => getProcesoId(r) !== id));
+      api.removeSeguimiento(row).catch(() => {});
+    } else {
+      setSeguimientos(prev => [...prev, row]);
+      api.addSeguimiento(row).catch(() => {});
+    }
+  }, [seguimientos]);
 
   const isSeguido = useCallback((row) => {
-    const id = row.id_del_proceso || row.referencia_del_proceso || row.nombre_del_procedimiento;
-    return seguimientos.some(r => (r.id_del_proceso || r.referencia_del_proceso || r.nombre_del_procedimiento) === id);
+    const id = getProcesoId(row);
+    return seguimientos.some(r => getProcesoId(r) === id);
   }, [seguimientos]);
 
   const PRIORITY_COLS = [
@@ -941,6 +926,15 @@ function SecopExplorer({ currentUser, onLogout }) {
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => setVistaGeovisor(v => !v)}
+              style={{
+                padding: "4px 12px", background: vistaGeovisor ? "#0369a1" : "transparent",
+                color: vistaGeovisor ? "#fff" : "#38bdf8",
+                border: "1px solid #0369a1", borderRadius: 6, fontSize: 12,
+                cursor: "pointer", transition: "all 0.2s",
+              }}
+            >🗺️ Geovisor</button>
             <span style={{ fontSize: 12, color: "#64748b" }}>👤 <strong style={{ color: "#94a3b8" }}>{currentUser}</strong></span>
             <button onClick={onLogout} style={{
               padding: "4px 12px", background: "transparent", color: "#475569",
@@ -961,6 +955,22 @@ function SecopExplorer({ currentUser, onLogout }) {
           </div>
         )}
       </div>
+
+      {/* Geovisor */}
+      {vistaGeovisor && (
+        <div style={{ width: "100%", height: "calc(100vh - 90px)" }}>
+          <GeovisorSecop
+            onClose={() => setVistaGeovisor(false)}
+            onSelectDepartamento={(nombre) => {
+              setDeptosFiltro([nombre.toUpperCase()]);
+              setVistaGeovisor(false);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Main content — oculto cuando el geovisor está activo */}
+      {!vistaGeovisor && <>
 
       {/* Filters */}
       <div style={{
@@ -1378,6 +1388,8 @@ function SecopExplorer({ currentUser, onLogout }) {
           </div>
         )}
       </div>
+
+      </>}
     </div>
   );
 }

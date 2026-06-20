@@ -1,7 +1,7 @@
 // Cliente para la API de autenticación SECOP
 // En dev o localhost → API local. En producción → tunnel público.
 const API_URL = (typeof window !== "undefined" && window.location.hostname !== "localhost")
-  ? "https://night-economic-chamber-grande.trycloudflare.com"
+  ? "https://api.giscaleingenieria.com"
   : "http://localhost:3001";
 
 function getToken() {

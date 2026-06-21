@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 const WFS_BASE = import.meta.env.DEV
   ? "/api/wfs"
-  : "https://geoserver.giscaleingenieria.com/geoserver/secop/ows";
+  : "https://api.giscaleingenieria.com/wfs";
 
 const WFS_URL = `${WFS_BASE}?service=WFS&version=2.0.0&request=GetFeature&typeNames=secop:departamentos&outputFormat=application/json&srsName=EPSG:4326`;
 

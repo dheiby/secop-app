@@ -3,6 +3,7 @@ import cors from "cors";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import pg from "pg";
+import https from "node:https";
 
 const { Pool } = pg;
 
@@ -128,6 +129,32 @@ app.get("/admin/users", authMiddleware, async (req, res) => {
     "SELECT id, username, email, role, created_at, last_login FROM users ORDER BY created_at DESC"
   );
   res.json(result.rows);
+});
+
+// ── Proxy WFS GeoServer (evita CORS en producción) ───────────────────
+app.get("/wfs", (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  const path = `/geoserver/secop/ows${qs ? "?" + qs : ""}`;
+  const options = {
+    hostname: "geoserver.giscaleingenieria.com",
+    path,
+    method: "GET",
+    headers: { "Accept": "application/json" },
+  };
+  const send = (status, body, ct = "application/json") => {
+    if (res.headersSent) return;
+    res.writeHead(status, { "Content-Type": ct, "Access-Control-Allow-Origin": "*" });
+    res.end(body);
+  };
+  const proxyReq = https.request(options, (proxyRes) => {
+    const chunks = [];
+    proxyRes.on("data", chunk => chunks.push(chunk));
+    proxyRes.on("end", () => send(proxyRes.statusCode, Buffer.concat(chunks), proxyRes.headers["content-type"] || "application/json"));
+    proxyRes.on("error", () => send(502, JSON.stringify({ error: "stream error" })));
+  });
+  proxyReq.on("error", (err) => send(502, JSON.stringify({ error: err.message })));
+  proxyReq.setTimeout(15000, () => proxyReq.destroy());
+  proxyReq.end();
 });
 
 // ── Health check ─────────────────────────────────────────────────────

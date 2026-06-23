@@ -8,7 +8,8 @@
     "proxy": "node proxy.js",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "maplibre-gl": "^5.24.0",
@@ -16,6 +17,7 @@
     "react-dom": "^19.2.6"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.42.2",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -27,6 +29,7 @@
     "express": "^5.2.1",
     "globals": "^17.6.0",
     "node-fetch": "^3.3.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "wrangler": "^4.104.0"
   }
 }

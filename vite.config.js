@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import https from 'node:https'
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 function nodeProxy(mountPath, hostname, basePath) {
   return (server) => {
     server.middlewares.use(mountPath, (req, res) => {
@@ -82,5 +84,5 @@ function secopProxyPlugin() {
 }
 
 export default defineConfig({
-  plugins: [react(), secopProxyPlugin()],
+  plugins: [react(), secopProxyPlugin(), cloudflare()],
 })
